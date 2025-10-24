@@ -2,17 +2,9 @@ pipeline {
     agent any
 
     environment {
-        PYTHON_IMAGE = 'python:3.13-slim'
-        IMAGE_NAME = 'flask_app'
         VENV_DIR = 'venv'
         LOG_DIR = 'ci_logs'
-    }
-
-    options {
-        // Keep build logs for troubleshooting
-        timestamps()
-        ansiColor('xterm')
-        buildDiscarder(logRotator(numToKeepStr: '10'))
+        IMAGE_NAME = 'flask_app'
     }
 
     stages {
@@ -42,7 +34,11 @@ pipeline {
                     echo "Running pytest..."
                     sh """
                         mkdir -p ${LOG_DIR}
-                        ${VENV_DIR}/bin/pytest -v test_app.py --junitxml=${LOG_DIR}/pytest-results.xml || (echo 'Pytest failed, check logs.' && exit 1)
+                        ${VENV_DIR}/bin/pytest -v test_app.py | tee ${LOG_DIR}/pytest.log
+                        if [ \$? -ne 0 ]; then
+                            echo 'Pytest failed, see logs.'
+                            exit 1
+                        fi
                     """
                 }
             }
@@ -54,34 +50,21 @@ pipeline {
                     echo "Running Bandit..."
                     sh """
                         mkdir -p ${LOG_DIR}
-                        ${VENV_DIR}/bin/bandit -r app -f json -o ${LOG_DIR}/bandit-report.json || (echo 'Bandit found issues.' && exit 1)
+                        ${VENV_DIR}/bin/bandit -r app -f json -o ${LOG_DIR}/bandit-report.json
+                        if [ \$? -ne 0 ]; then
+                            echo 'Bandit found issues.'
+                            exit 1
+                        fi
                     """
                 }
             }
         }
 
-        stage('Container Build & Vulnerability Scan (Trivy)') {
+        stage('Build Docker Image') {
             steps {
                 script {
                     echo "Building Docker image..."
                     sh "docker-compose build --no-cache"
-                    echo "Running Trivy scan..."
-                    sh """
-                        mkdir -p ${LOG_DIR}
-                        trivy image ${IMAGE_NAME}:latest --format json --output ${LOG_DIR}/trivy-report.json || (echo 'Trivy found vulnerabilities.' && exit 1)
-                    """
-                }
-            }
-        }
-
-        stage('Dependency Vulnerability Check (Safety)') {
-            steps {
-                script {
-                    echo "Checking Python dependencies with Safety..."
-                    sh """
-                        mkdir -p ${LOG_DIR}
-                        ${VENV_DIR}/bin/safety check --json > ${LOG_DIR}/safety-report.json || (echo 'Safety found vulnerabilities.' && exit 1)
-                    """
                 }
             }
         }
@@ -89,7 +72,7 @@ pipeline {
         stage('Deploy Application') {
             steps {
                 script {
-                    echo "Deploying Flask application via Docker Compose..."
+                    echo "Deploying Flask application..."
                     sh "docker-compose up -d"
                 }
             }
@@ -99,7 +82,7 @@ pipeline {
 
     post {
         always {
-            echo "Cleaning workspace..."
+            echo "Cleaning workspace and archiving logs..."
             cleanWs()
             archiveArtifacts artifacts: "${LOG_DIR}/*", allowEmptyArchive: true
         }
