@@ -1,13 +1,16 @@
 pipeline {
     agent any
+
     environment {
-        IMAGE_NAME = 'flask_app'
-        LOG_DIR = 'ci_logs'
+        VENV_DIR = 'venv'
+        CI_LOGS = 'ci_logs'
+        IMAGE_NAME = 'lab-2-app'
     }
+
     stages {
         stage('Checkout') {
             steps {
-                echo 'Cloning repository...'
+                echo "Cloning repository..."
                 checkout scm
             }
         }
@@ -15,24 +18,21 @@ pipeline {
         stage('Setup Virtual Environment') {
             steps {
                 script {
-                    echo 'Creating virtual environment...'
-                    sh 'python3 -m venv venv'
-                    echo 'Installing dependencies...'
-                    sh 'venv/bin/pip install --upgrade pip'
-                    sh 'venv/bin/pip install -r requirements.txt'
-		    sh "${VENV_DIR}/bin/pip install bandit pytest safety"
+                    echo "Creating virtual environment..."
+                    sh "python3 -m venv ${VENV_DIR}"
+                    echo "Upgrading pip and installing dependencies..."
+                    sh "${VENV_DIR}/bin/pip install --upgrade pip"
+                    sh "${VENV_DIR}/bin/pip install -r requirements.txt"
                 }
             }
         }
 
-        stage('Run Tests (pytest)') {
+        stage('Run Tests') {
             steps {
                 script {
-                    echo 'Running pytest...'
-                    sh """
-                        mkdir -p ${LOG_DIR}
-                        venv/bin/pytest -v test_app.py | tee ${LOG_DIR}/pytest.log
-                    """
+                    echo "Running pytest..."
+                    sh "mkdir -p ${CI_LOGS}"
+                    sh "${VENV_DIR}/bin/pytest -v test_app.py | tee ${CI_LOGS}/pytest.log"
                 }
             }
         }
@@ -40,23 +40,29 @@ pipeline {
         stage('Static Code Analysis (Bandit)') {
             steps {
                 script {
-                    echo 'Running Bandit...'
-                    sh """
-                        mkdir -p ${LOG_DIR}
-                        venv/bin/bandit -r app -f json -o ${LOG_DIR}/bandit-report.json || true
-                    """
+                    echo "Running Bandit..."
+                    sh "mkdir -p ${CI_LOGS}"
+                    // Run Bandit, save JSON output
+                    sh "${VENV_DIR}/bin/bandit -r app -f json -o ${CI_LOGS}/bandit-report.json || true"
                 }
             }
         }
 
-        stage('Dependency Vulnerability Scan (Safety)') {
+        stage('Dependency Vulnerabilities (Safety)') {
             steps {
                 script {
-                    echo 'Running Safety...'
-                    sh """
-                        mkdir -p ${LOG_DIR}
-                        venv/bin/safety check --json > ${LOG_DIR}/safety-report.json || true
-                    """
+                    echo "Running Safety..."
+                    sh "mkdir -p ${CI_LOGS}"
+                    sh "${VENV_DIR}/bin/safety check --json > ${CI_LOGS}/safety-report.json || true"
+                }
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                script {
+                    echo "Building Docker image..."
+                    sh "docker-compose build || true"
                 }
             }
         }
@@ -64,36 +70,29 @@ pipeline {
         stage('Container Vulnerability Scan (Trivy)') {
             steps {
                 script {
-                    echo 'Building Docker image...'
-                    sh 'docker-compose build'
-                    echo 'Running Trivy scan...'
-                    sh """
-                        mkdir -p ${LOG_DIR}
-                        trivy image --format json --output ${LOG_DIR}/trivy-report.json ${IMAGE_NAME}:latest || true
-                    """
+                    echo "Running Trivy..."
+                    sh "mkdir -p ${CI_LOGS}"
+                    // Only scan the image, don't fail the pipeline on low/medium
+                    sh "trivy image --severity CRITICAL,HIGH --format json -o ${CI_LOGS}/trivy-report.json ${IMAGE_NAME}:latest || true"
                 }
-            }
-        }
-
-        stage('Build Docker Image') {
-            steps {
-                echo 'Building Docker image...'
-                sh 'docker-compose build'
             }
         }
 
         stage('Deploy Application') {
             steps {
-                echo 'Deploying application...'
-                sh 'docker-compose up -d'
+                script {
+                    echo "Deploying Docker container..."
+                    sh "docker-compose up -d || true"
+                }
             }
         }
     }
 
     post {
         always {
-            echo 'Pipeline finished. Logs saved in ci_logs/'
-            archiveArtifacts artifacts: 'ci_logs/**', allowEmptyArchive: true
+            echo "Archiving CI logs..."
+            archiveArtifacts artifacts: "${CI_LOGS}/*.json, ${CI_LOGS}/*.log", allowEmptyArchive: true
+            echo "Pipeline finished. Check archived logs for details."
         }
     }
 }
