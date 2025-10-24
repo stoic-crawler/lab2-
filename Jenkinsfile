@@ -20,6 +20,7 @@ pipeline {
                     echo 'Installing dependencies...'
                     sh 'venv/bin/pip install --upgrade pip'
                     sh 'venv/bin/pip install -r requirements.txt'
+		    sh "${VENV_DIR}/bin/pip install bandit pytest safety"
                 }
             }
         }
