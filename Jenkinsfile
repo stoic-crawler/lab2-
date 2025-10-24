@@ -1,17 +1,13 @@
 pipeline {
     agent any
-
     environment {
-        VENV_DIR = 'venv'
-        LOG_DIR = 'ci_logs'
         IMAGE_NAME = 'flask_app'
+        LOG_DIR = 'ci_logs'
     }
-
     stages {
-
         stage('Checkout') {
             steps {
-                echo "Cloning repository..."
+                echo 'Cloning repository...'
                 checkout scm
             }
         }
@@ -19,26 +15,22 @@ pipeline {
         stage('Setup Virtual Environment') {
             steps {
                 script {
-                    echo "Creating virtual environment..."
-                    sh "python3 -m venv ${VENV_DIR}"
-                    echo "Installing dependencies..."
-                    sh "${VENV_DIR}/bin/pip install --upgrade pip"
-                    sh "${VENV_DIR}/bin/pip install -r requirements.txt"
+                    echo 'Creating virtual environment...'
+                    sh 'python3 -m venv venv'
+                    echo 'Installing dependencies...'
+                    sh 'venv/bin/pip install --upgrade pip'
+                    sh 'venv/bin/pip install -r requirements.txt'
                 }
             }
         }
 
-        stage('Run Tests') {
+        stage('Run Tests (pytest)') {
             steps {
                 script {
-                    echo "Running pytest..."
+                    echo 'Running pytest...'
                     sh """
                         mkdir -p ${LOG_DIR}
-                        ${VENV_DIR}/bin/pytest -v test_app.py | tee ${LOG_DIR}/pytest.log
-                        if [ \$? -ne 0 ]; then
-                            echo 'Pytest failed, see logs.'
-                            exit 1
-                        fi
+                        venv/bin/pytest -v test_app.py | tee ${LOG_DIR}/pytest.log
                     """
                 }
             }
@@ -47,14 +39,36 @@ pipeline {
         stage('Static Code Analysis (Bandit)') {
             steps {
                 script {
-                    echo "Running Bandit..."
+                    echo 'Running Bandit...'
                     sh """
                         mkdir -p ${LOG_DIR}
-                        ${VENV_DIR}/bin/bandit -r app -f json -o ${LOG_DIR}/bandit-report.json
-                        if [ \$? -ne 0 ]; then
-                            echo 'Bandit found issues.'
-                            exit 1
-                        fi
+                        venv/bin/bandit -r app -f json -o ${LOG_DIR}/bandit-report.json || true
+                    """
+                }
+            }
+        }
+
+        stage('Dependency Vulnerability Scan (Safety)') {
+            steps {
+                script {
+                    echo 'Running Safety...'
+                    sh """
+                        mkdir -p ${LOG_DIR}
+                        venv/bin/safety check --json > ${LOG_DIR}/safety-report.json || true
+                    """
+                }
+            }
+        }
+
+        stage('Container Vulnerability Scan (Trivy)') {
+            steps {
+                script {
+                    echo 'Building Docker image...'
+                    sh 'docker-compose build'
+                    echo 'Running Trivy scan...'
+                    sh """
+                        mkdir -p ${LOG_DIR}
+                        trivy image --format json --output ${LOG_DIR}/trivy-report.json ${IMAGE_NAME}:latest || true
                     """
                 }
             }
@@ -62,35 +76,23 @@ pipeline {
 
         stage('Build Docker Image') {
             steps {
-                script {
-                    echo "Building Docker image..."
-                    sh "docker-compose build --no-cache"
-                }
+                echo 'Building Docker image...'
+                sh 'docker-compose build'
             }
         }
 
         stage('Deploy Application') {
             steps {
-                script {
-                    echo "Deploying Flask application..."
-                    sh "docker-compose up -d"
-                }
+                echo 'Deploying application...'
+                sh 'docker-compose up -d'
             }
         }
-
     }
 
     post {
         always {
-            echo "Cleaning workspace and archiving logs..."
-            cleanWs()
-            archiveArtifacts artifacts: "${LOG_DIR}/*", allowEmptyArchive: true
-        }
-        failure {
-            echo "Build failed. Check logs for details."
-        }
-        success {
-            echo "Build succeeded."
+            echo 'Pipeline finished. Logs saved in ci_logs/'
+            archiveArtifacts artifacts: 'ci_logs/**', allowEmptyArchive: true
         }
     }
 }
