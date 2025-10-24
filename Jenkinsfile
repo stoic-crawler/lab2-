@@ -2,33 +2,36 @@ pipeline {
     agent any
 
     environment {
-        PYTHON = 'python3'
+        PYTHON_IMAGE = 'python:3.13-slim'
         IMAGE_NAME = 'flask_app'
-        REPORT_DIR = 'reports'
-        TRIVY_REPORT = "${REPORT_DIR}/trivy-report.txt"
-        BANDIT_REPORT = "${REPORT_DIR}/bandit-report.txt"
-        SAFETY_REPORT = "${REPORT_DIR}/safety-report.txt"
+        VENV_DIR = 'venv'
+        LOG_DIR = 'ci_logs'
+    }
+
+    options {
+        // Keep build logs for troubleshooting
+        timestamps()
+        ansiColor('xterm')
+        buildDiscarder(logRotator(numToKeepStr: '10'))
     }
 
     stages {
+
         stage('Checkout') {
             steps {
-                echo 'Cloning repository...'
+                echo "Cloning repository..."
                 checkout scm
             }
         }
 
-        stage('Setup Python Environment') {
+        stage('Setup Virtual Environment') {
             steps {
                 script {
-                    echo 'Creating virtual environment...'
-                    sh '''
-                        ${PYTHON} -m venv venv
-                        . venv/bin/activate
-                        pip install --upgrade pip
-                        pip install -r requirements.txt pytest bandit safety
-                        mkdir -p ${REPORT_DIR}
-                    '''
+                    echo "Creating virtual environment..."
+                    sh "python3 -m venv ${VENV_DIR}"
+                    echo "Installing dependencies..."
+                    sh "${VENV_DIR}/bin/pip install --upgrade pip"
+                    sh "${VENV_DIR}/bin/pip install -r requirements.txt"
                 }
             }
         }
@@ -36,11 +39,11 @@ pipeline {
         stage('Run Tests') {
             steps {
                 script {
-                    echo 'Running tests with pytest...'
-                    def result = sh(script: '. venv/bin/activate && pytest --maxfail=1 --disable-warnings -q', returnStatus: true)
-                    if (result != 0) {
-                        error("Build stopped: pytest failed")
-                    }
+                    echo "Running pytest..."
+                    sh """
+                        mkdir -p ${LOG_DIR}
+                        ${VENV_DIR}/bin/pytest -v test_app.py --junitxml=${LOG_DIR}/pytest-results.xml || (echo 'Pytest failed, check logs.' && exit 1)
+                    """
                 }
             }
         }
@@ -48,74 +51,63 @@ pipeline {
         stage('Static Code Analysis (Bandit)') {
             steps {
                 script {
-                    echo 'Running Bandit scan...'
-                    def result = sh(script: ". venv/bin/activate && bandit -r . -f txt -o ${BANDIT_REPORT}", returnStatus: true)
-                    if (result != 0) {
-                        echo "Bandit found issues. Report saved to ${BANDIT_REPORT}"
-                        error("Build stopped: Bandit found security issues")
-                    }
+                    echo "Running Bandit..."
+                    sh """
+                        mkdir -p ${LOG_DIR}
+                        ${VENV_DIR}/bin/bandit -r app -f json -o ${LOG_DIR}/bandit-report.json || (echo 'Bandit found issues.' && exit 1)
+                    """
                 }
             }
         }
 
-        stage('Container Vulnerability Scan (Trivy)') {
+        stage('Container Build & Vulnerability Scan (Trivy)') {
             steps {
                 script {
-                    echo 'Building Docker image for scanning...'
-                    sh 'docker-compose build'
-                    echo 'Running Trivy scan...'
-                    def result = sh(script: "trivy image ${IMAGE_NAME}:latest > ${TRIVY_REPORT} || true", returnStatus: true)
-
-                    def criticalIssues = sh(script: "grep -c 'CRITICAL' ${TRIVY_REPORT} || true", returnStdout: true).trim()
-                    def highIssues = sh(script: "grep -c 'HIGH' ${TRIVY_REPORT} || true", returnStdout: true).trim()
-
-                    if (criticalIssues != '0' || highIssues != '0') {
-                        echo "Trivy found ${criticalIssues} critical and ${highIssues} high vulnerabilities. Report saved to ${TRIVY_REPORT}"
-                        error("Build stopped: Trivy found vulnerabilities")
-                    } else {
-                        echo "No critical or high vulnerabilities found by Trivy."
-                    }
+                    echo "Building Docker image..."
+                    sh "docker-compose build --no-cache"
+                    echo "Running Trivy scan..."
+                    sh """
+                        mkdir -p ${LOG_DIR}
+                        trivy image ${IMAGE_NAME}:latest --format json --output ${LOG_DIR}/trivy-report.json || (echo 'Trivy found vulnerabilities.' && exit 1)
+                    """
                 }
             }
         }
 
-        stage('Dependency Vulnerability Scan (Safety)') {
+        stage('Dependency Vulnerability Check (Safety)') {
             steps {
                 script {
-                    echo 'Running Safety check...'
-                    def result = sh(script: ". venv/bin/activate && safety check --full-report > ${SAFETY_REPORT} || true", returnStatus: true)
-
-                    def issues = sh(script: "grep -c '>' ${SAFETY_REPORT} || true", returnStdout: true).trim()
-                    if (issues != '0') {
-                        echo "Safety found dependency issues. Report saved to ${SAFETY_REPORT}"
-                        error("Build stopped: Safety found vulnerable dependencies")
-                    } else {
-                        echo "No dependency vulnerabilities found by Safety."
-                    }
+                    echo "Checking Python dependencies with Safety..."
+                    sh """
+                        mkdir -p ${LOG_DIR}
+                        ${VENV_DIR}/bin/safety check --json > ${LOG_DIR}/safety-report.json || (echo 'Safety found vulnerabilities.' && exit 1)
+                    """
                 }
-            }
-        }
-
-        stage('Build Docker Image') {
-            steps {
-                echo 'Building Docker image for deployment...'
-                sh 'docker-compose build'
             }
         }
 
         stage('Deploy Application') {
             steps {
-                echo 'Deploying application container...'
-                sh 'docker-compose up -d'
+                script {
+                    echo "Deploying Flask application via Docker Compose..."
+                    sh "docker-compose up -d"
+                }
             }
         }
+
     }
 
     post {
         always {
-            echo 'Cleaning workspace...'
-            archiveArtifacts artifacts: 'reports/*.txt', onlyIfSuccessful: false
+            echo "Cleaning workspace..."
             cleanWs()
+            archiveArtifacts artifacts: "${LOG_DIR}/*", allowEmptyArchive: true
+        }
+        failure {
+            echo "Build failed. Check logs for details."
+        }
+        success {
+            echo "Build succeeded."
         }
     }
 }

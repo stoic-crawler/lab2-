@@ -2,41 +2,50 @@ from app.main import app
 from random import randint
 import pytest
 
-x, y = randint(0, 1000), randint(0, 10000)
-# Use Flask test client
+# Flask test client
 client = app.test_client()
 
+# API token for authentication
+HEADERS = {"Authorization": "Bearer secret123"}
+
+# Random numbers for tests
+x = randint(0, 1000)
+y = randint(1, 10000)  # ensure y != 0 to avoid division by zero
+
 def test_add():
-    response = client.get(f"/add?a={x}&b={y}")
+    response = client.get(f"/add?a={x}&b={y}", headers=HEADERS)
     assert response.status_code == 200
     data = response.get_json()
     assert data["result"] == x + y
 
 def test_subtract():
-    response = client.get(f"/subtract?a={x}&b={y}")
+    response = client.get(f"/subtract?a={x}&b={y}", headers=HEADERS)
     assert response.status_code == 200
     data = response.get_json()
     assert data["result"] == x - y
 
 def test_multiply():
-    response = client.get(f"/multiply?a={x}&b={y}")
+    response = client.get(f"/multiply?a={x}&b={y}", headers=HEADERS)
     assert response.status_code == 200
     data = response.get_json()
     assert data["result"] == x * y
 
-while y == 0:  # ensure no division by zero
-    y = randint(0, 10000)
-
-
 def test_divide():
-    response = client.get(f"/divide?a={x}&b={y}")
+    response = client.get(f"/divide?a={x}&b={y}", headers=HEADERS)
     assert response.status_code == 200
     data = response.get_json()
     assert data["result"] == x / y
 
 def test_divide_by_zero():
-    response = client.get(f"/divide?a={x}&b=0")
+    response = client.get(f"/divide?a={x}&b=0", headers=HEADERS)
     assert response.status_code == 400
     data = response.get_json()
     assert data["detail"] == "Division by zero"
+
+def test_invalid_numeric():
+    # Test invalid input
+    response = client.get(f"/add?a=foo&b=bar", headers=HEADERS)
+    assert response.status_code == 400
+    data = response.get_json()
+    assert data["detail"] == "Invalid numeric input"
 
