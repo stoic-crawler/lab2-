@@ -1,6 +1,14 @@
 pipeline {
     agent any
 
+    options {
+        // If any stage marks the build UNSTABLE, skip subsequent stages.
+        // Remove this if you want to continue through unstable stages.
+        skipStagesAfterUnstable()
+        // show timestamps in console log
+        timestamps()
+    }
+
     environment {
         VENV_DIR = 'venv'
         CI_LOGS = 'ci_logs'
@@ -18,11 +26,14 @@ pipeline {
         stage('Setup Virtual Environment') {
             steps {
                 script {
-                    echo "Creating virtual environment..."
-                    sh "python3 -m venv ${VENV_DIR}"
-                    echo "Upgrading pip and installing dependencies..."
-                    sh "${VENV_DIR}/bin/pip install --upgrade pip"
-                    sh "${VENV_DIR}/bin/pip install -r requirements.txt"
+                    echo "Creating virtual environment (if missing)..."
+                    sh """
+                        if [ ! -d "${VENV_DIR}" ]; then
+                            python3 -m venv ${VENV_DIR}
+                        fi
+                        ${VENV_DIR}/bin/pip install --upgrade pip
+                        ${VENV_DIR}/bin/pip install -r requirements.txt
+                    """
                 }
             }
         }
@@ -32,6 +43,7 @@ pipeline {
                 script {
                     echo "Running pytest..."
                     sh "mkdir -p ${CI_LOGS}"
+                    // This will fail the stage if pytest exits non-zero
                     sh "${VENV_DIR}/bin/pytest -v test_app.py | tee ${CI_LOGS}/pytest.log"
                 }
             }
@@ -42,8 +54,8 @@ pipeline {
                 script {
                     echo "Running Bandit..."
                     sh "mkdir -p ${CI_LOGS}"
-                    // Run Bandit, save JSON output
-                    sh "${VENV_DIR}/bin/bandit -r app -f json -o ${CI_LOGS}/bandit-report.json || true"
+                    // Remove '|| true' so pipeline fails if Bandit returns non-zero.
+                    sh "${VENV_DIR}/bin/bandit -r app -f json -o ${CI_LOGS}/bandit-report.json"
                 }
             }
         }
@@ -53,7 +65,8 @@ pipeline {
                 script {
                     echo "Running Safety..."
                     sh "mkdir -p ${CI_LOGS}"
-                    sh "${VENV_DIR}/bin/safety check --json > ${CI_LOGS}/safety-report.json || true"
+                    // Fail pipeline if safety finds vulnerabilities (non-zero exit)
+                    sh "${VENV_DIR}/bin/safety check --json > ${CI_LOGS}/safety-report.json"
                 }
             }
         }
@@ -62,7 +75,8 @@ pipeline {
             steps {
                 script {
                     echo "Building Docker image..."
-                    sh "docker-compose build || true"
+                    // Fail pipeline if docker build fails
+                    sh "docker-compose build"
                 }
             }
         }
@@ -72,8 +86,8 @@ pipeline {
                 script {
                     echo "Running Trivy..."
                     sh "mkdir -p ${CI_LOGS}"
-                    // Only scan the image, don't fail the pipeline on low/medium
-                    sh "trivy image --severity CRITICAL,HIGH --format json -o ${CI_LOGS}/trivy-report.json ${IMAGE_NAME}:latest || true"
+                    // Fail pipeline if Trivy exits non-zero (i.e. vulnerabilities of requested severities found)
+                    sh "trivy image --severity CRITICAL,HIGH --format json -o ${CI_LOGS}/trivy-report.json ${IMAGE_NAME}:latest"
                 }
             }
         }
@@ -82,7 +96,8 @@ pipeline {
             steps {
                 script {
                     echo "Deploying Docker container..."
-                    sh "docker-compose up -d || true"
+                    // Fail pipeline if docker-compose up fails
+                    sh "docker-compose up -d"
                 }
             }
         }
@@ -96,4 +111,3 @@ pipeline {
         }
     }
 }
-
