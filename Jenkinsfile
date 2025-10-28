@@ -4,7 +4,7 @@ pipeline {
     environment {
         VENV_DIR   = 'venv'
         CI_LOGS    = 'ci_logs'
-        IMAGE_NAME = 'lab-2-app'
+        IMAGE_NAME = 'lab2_app'
     }
 
     stages {
