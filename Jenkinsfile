@@ -99,7 +99,7 @@ pipeline {
                     timeout(time: 20, unit: 'MINUTES') {
                         echo "Building Docker image"
                         catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
-                            sh "docker-compose build"
+                            sh "sudo docker-compose build"
                         }
                     }
                 }
@@ -115,7 +115,7 @@ pipeline {
                             sh '''
                                 set -e
                                 apt-get update
-                                apt-get install -y trivy || true
+                                sudo snap install -y trivy || true
                                 trivy --version || true
                             '''
                         }
