@@ -2,10 +2,7 @@ pipeline {
     agent any
 
     options {
-        // If any stage marks the build UNSTABLE, skip subsequent stages.
-        // Remove this if you want to continue through unstable stages.
         skipStagesAfterUnstable()
-        // show timestamps in console log
         timestamps()
     }
 
@@ -13,12 +10,15 @@ pipeline {
         VENV_DIR = 'venv'
         CI_LOGS = 'ci_logs'
         IMAGE_NAME = 'lab-2-app'
+        SUDO = 'sudo'
     }
 
     stages {
         stage('Checkout') {
             steps {
                 echo "Cloning repository..."
+                sh "${SUDO} bash -lc 'git rev-parse --is-inside-work-tree || true; git config --global --add safe.directory $(pwd); git status --porcelain || true; git rev-parse --abbrev-ref HEAD || true'"
+                // fallback: use checkout scm if preferred
                 checkout scm
             }
         }
@@ -28,11 +28,14 @@ pipeline {
                 script {
                     echo "Creating virtual environment (if missing)..."
                     sh """
-                        if [ ! -d "${VENV_DIR}" ]; then
-                            python3 -m venv ${VENV_DIR}
-                        fi
-                        ${VENV_DIR}/bin/pip install --upgrade pip
-                        ${VENV_DIR}/bin/pip install -r requirements.txt
+                        ${SUDO} bash -lc '
+                            if [ ! -d "${VENV_DIR}" ]; then
+                                python3 -m venv ${VENV_DIR}
+                                chown -R $(whoami):$(whoami) ${VENV_DIR} || true
+                            fi
+                            ${VENV_DIR}/bin/pip install --upgrade pip
+                            ${VENV_DIR}/bin/pip install -r requirements.txt
+                        '
                     """
                 }
             }
@@ -42,9 +45,9 @@ pipeline {
             steps {
                 script {
                     echo "Running pytest..."
-                    sh "mkdir -p ${CI_LOGS}"
-                    // This will fail the stage if pytest exits non-zero
-                    sh "${VENV_DIR}/bin/pytest -v test_app.py | tee ${CI_LOGS}/pytest.log"
+                    sh "${SUDO} mkdir -p ${CI_LOGS}"
+                    // run entire pipeline under sudo so tee and pytest are run as root
+                    sh """${SUDO} bash -lc '${VENV_DIR}/bin/pytest -v test_app.py | tee ${CI_LOGS}/pytest.log'"""
                 }
             }
         }
@@ -53,9 +56,8 @@ pipeline {
             steps {
                 script {
                     echo "Running Bandit..."
-                    sh "mkdir -p ${CI_LOGS}"
-                    // Remove '|| true' so pipeline fails if Bandit returns non-zero.
-                    sh "${VENV_DIR}/bin/bandit -r app -f json -o ${CI_LOGS}/bandit-report.json"
+                    sh "${SUDO} mkdir -p ${CI_LOGS}"
+                    sh "${SUDO} bash -lc '${VENV_DIR}/bin/bandit -r app -f json -o ${CI_LOGS}/bandit-report.json'"
                 }
             }
         }
@@ -64,9 +66,8 @@ pipeline {
             steps {
                 script {
                     echo "Running Safety..."
-                    sh "mkdir -p ${CI_LOGS}"
-                    // Fail pipeline if safety finds vulnerabilities (non-zero exit)
-                    sh "${VENV_DIR}/bin/safety check --json > ${CI_LOGS}/safety-report.json"
+                    sh "${SUDO} mkdir -p ${CI_LOGS}"
+                    sh "${SUDO} bash -lc '${VENV_DIR}/bin/safety check --json > ${CI_LOGS}/safety-report.json'"
                 }
             }
         }
@@ -75,8 +76,8 @@ pipeline {
             steps {
                 script {
                     echo "Building Docker image..."
-                    // Fail pipeline if docker build fails
-                    sh "docker-compose build"
+                    // uses sudo to invoke docker-compose
+                    sh "${SUDO} bash -lc 'docker-compose build'"
                 }
             }
         }
@@ -85,9 +86,8 @@ pipeline {
             steps {
                 script {
                     echo "Running Trivy..."
-                    sh "mkdir -p ${CI_LOGS}"
-                    // Fail pipeline if Trivy exits non-zero (i.e. vulnerabilities of requested severities found)
-                    sh "trivy image --severity CRITICAL,HIGH --format json -o ${CI_LOGS}/trivy-report.json ${IMAGE_NAME}:latest"
+                    sh "${SUDO} mkdir -p ${CI_LOGS}"
+                    sh "${SUDO} bash -lc 'trivy image --severity CRITICAL,HIGH --format json -o ${CI_LOGS}/trivy-report.json ${IMAGE_NAME}:latest'"
                 }
             }
         }
@@ -96,8 +96,7 @@ pipeline {
             steps {
                 script {
                     echo "Deploying Docker container..."
-                    // Fail pipeline if docker-compose up fails
-                    sh "docker-compose up -d"
+                    sh "${SUDO} bash -lc 'docker-compose up -d'"
                 }
             }
         }
@@ -106,6 +105,8 @@ pipeline {
     post {
         always {
             echo "Archiving CI logs..."
+            // archiveArtifacts runs on the Jenkins master and typically does not require sudo,
+            // but we leave it as-is (it doesn't run via sh)
             archiveArtifacts artifacts: "${CI_LOGS}/*.json, ${CI_LOGS}/*.log", allowEmptyArchive: true
             echo "Pipeline finished. Check archived logs for details."
         }
