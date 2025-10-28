@@ -113,7 +113,7 @@ pipeline {
                         echo "Installing Trivy with snap"
                         catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
                             sh '''
-                                sudo snap install -y trivy || true
+                                sudo snap install trivy || true
                                 trivy --version || true
                             '''
                         }
