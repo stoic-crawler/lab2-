@@ -106,22 +106,6 @@ pipeline {
             }
         }
 
-        stage('Install Trivy') {
-            steps {
-                script {
-                    timeout(time: 5, unit: 'MINUTES') {
-                        echo "Installing Trivy with snap"
-                        catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
-                            sh '''
-                                sudo snap install trivy || true
-                                trivy --version || true
-                            '''
-                        }
-                    }
-                }
-            }
-        }
-
         stage('Container Vulnerability Scan (Trivy)') {
             steps {
                 script {
