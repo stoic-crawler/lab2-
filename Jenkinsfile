@@ -110,11 +110,9 @@ pipeline {
             steps {
                 script {
                     timeout(time: 5, unit: 'MINUTES') {
-                        echo "Installing Trivy with apt"
+                        echo "Installing Trivy with snap"
                         catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
                             sh '''
-                                set -e
-                                apt-get update
                                 sudo snap install -y trivy || true
                                 trivy --version || true
                             '''
