@@ -1,11 +1,6 @@
 pipeline {
     agent any
 
-    options {
-        skipStagesAfterUnstable()
-        timestamps()
-    }
-
     environment {
         VENV_DIR   = 'venv'
         CI_LOGS    = 'ci_logs'
