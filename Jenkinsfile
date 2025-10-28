@@ -10,7 +10,6 @@ pipeline {
         VENV_DIR   = 'venv'
         CI_LOGS    = 'ci_logs'
         IMAGE_NAME = 'lab-2-app'
-        SUDO       = 'sudo -n'
     }
 
     stages {
@@ -99,8 +98,24 @@ pipeline {
             steps {
                 script {
                     timeout(time: 20, unit: 'MINUTES') {
-                        echo "Building Docker image (sudo -n so it won't prompt)"
-                        sh "${env.SUDO} bash -lc 'docker-compose build'"
+                        echo "Building Docker image"
+                        sh "docker-compose build"
+                    }
+                }
+            }
+        }
+
+        stage('Install Trivy') {
+            steps {
+                script {
+                    timeout(time: 5, unit: 'MINUTES') {
+                        echo "Installing Trivy with apt"
+                        sh '''
+                            set -e
+                            apt-get update
+                            apt-get install -y trivy
+                            trivy --version
+                        '''
                     }
                 }
             }
@@ -111,7 +126,7 @@ pipeline {
                 script {
                     timeout(time: 10, unit: 'MINUTES') {
                         sh "mkdir -p ${env.CI_LOGS}"
-                        sh "${env.SUDO} bash -lc 'trivy image --severity CRITICAL,HIGH --format json -o ${env.CI_LOGS}/trivy-report.json ${env.IMAGE_NAME}:latest'"
+                        sh "trivy image --severity CRITICAL,HIGH --format json -o ${env.CI_LOGS}/trivy-report.json ${env.IMAGE_NAME}:latest"
                     }
                 }
             }
@@ -121,8 +136,8 @@ pipeline {
             steps {
                 script {
                     timeout(time: 10, unit: 'MINUTES') {
-                        echo "Deploying Docker container (uses sudo -n)"
-                        sh "${env.SUDO} bash -lc 'docker-compose up -d'"
+                        echo "Deploying Docker container"
+                        sh "docker-compose up -d"
                     }
                 }
             }
