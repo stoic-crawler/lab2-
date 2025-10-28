@@ -2,6 +2,7 @@ pipeline {
     agent any
 
     options {
+        // skip later stages if the build becomes UNSTABLE
         skipStagesAfterUnstable()
         timestamps()
     }
@@ -10,7 +11,8 @@ pipeline {
         VENV_DIR   = 'venv'
         CI_LOGS    = 'ci_logs'
         IMAGE_NAME = 'lab-2-app'
-        // REMOVED: SUDO environment variable. It's safer to be explicit.
+        // use -n so sudo will NOT prompt for a password (it will fail fast if not allowed)
+        SUDO       = 'sudo -n'
     }
 
     stages {
@@ -23,82 +25,93 @@ pipeline {
 
         stage('Setup Virtual Environment') {
             steps {
-                echo "Creating virtual environment (if missing)..."
-                // This is the main fix:
-                // 1. Removed 'sudo bash -lc' wrapper.
-                // 2. Used a clean multiline sh step.
-                // 3. No sudo is needed to create a venv in the workspace.
-                sh """
-                    #!/bin/bash
-                    set -ex  // Exit on error, print commands
+                script {
+                    // don't run the venv creation under sudo (creates root-owned venv and causes trouble)
+                    // but show a short sudo availability debug line so we know whether sudo would block later.
+                    timeout(time: 10, unit: 'MINUTES') {
+                        sh """
+                           echo "=== Debug: user and sudo availability ==="
+                           id
+                           ${env.SUDO} true >/dev/null 2>&1 && echo "sudo works (no password required)" || echo "sudo not available or requires password"
+                        """
 
-                    if [ ! -d "${env.VENV_DIR}" ]; then
-                        python3 -m venv "${env.VENV_DIR}"
-                    fi
-                    
-                    "${env.VENV_DIR}/bin/pip" install --upgrade pip
-                    "${env.VENV_DIR}/bin/pip" install -r requirements.txt
-                """
+                        // create venv as the Jenkins runtime user (no sudo)
+                        sh "/usr/bin/python3 -m venv ${env.VENV_DIR} || echo 'venv exists or creation failed'"
+
+                        // upgrade pip and install deps (in-user venv)
+                        sh "${env.VENV_DIR}/bin/pip install --upgrade pip"
+                        sh "${env.VENV_DIR}/bin/pip install -r requirements.txt"
+                    }
+                }
             }
         }
 
         stage('Run Tests') {
             steps {
-                echo "Running pytest..."
-                // No sudo needed to create a dir or run pytest in the workspace
-                sh """
-                    mkdir -p "${env.CI_LOGS}"
-                    "${env.VENV_DIR}/bin/pytest" -v test_app.py | tee "${env.CI_LOGS}/pytest.log"
-                """
+                script {
+                    timeout(time: 10, unit: 'MINUTES') {
+                        sh "mkdir -p ${env.CI_LOGS}"
+                        // run pytest as the Jenkins runtime user (no sudo)
+                        sh "${env.VENV_DIR}/bin/pytest -v test_app.py | tee ${env.CI_LOGS}/pytest.log"
+                    }
+                }
             }
         }
 
         stage('Static Code Analysis (Bandit)') {
             steps {
-                echo "Running Bandit..."
-                // No sudo needed
-                sh """
-                    mkdir -p "${env.CI_LOGS}"
-                    "${env.VENV_DIR}/bin/bandit" -r app -f json -o "${env.CI_LOGS}/bandit-report.json"
-                """
+                script {
+                    timeout(time: 5, unit: 'MINUTES') {
+                        sh "mkdir -p ${env.CI_LOGS}"
+                        sh "${env.VENV_DIR}/bin/bandit -r app -f json -o ${env.CI_LOGS}/bandit-report.json"
+                    }
+                }
             }
         }
 
         stage('Dependency Vulnerabilities (Safety)') {
             steps {
-                echo "Running Safety..."
-                // No sudo needed
-                sh """
-                    mkdir -p "${env.CI_LOGS}"
-                    "${env.VENV_DIR}/bin/safety" check --json > "${env.CI_LOGS}/safety-report.json"
-                """
+                script {
+                    timeout(time: 5, unit: 'MINUTES') {
+                        sh "mkdir -p ${env.CI_LOGS}"
+                        sh "${env.VENV_DIR}/bin/safety check --json > ${env.CI_LOGS}/safety-report.json"
+                    }
+                }
             }
         }
 
         stage('Build Docker Image') {
             steps {
-                echo "Building Docker image..."
-                // Kept 'sudo' for Docker as it often needs it, but removed 'bash -lc'
-                sh "sudo docker-compose build"
+                script {
+                    timeout(time: 15, unit: 'MINUTES') {
+                        echo "Building Docker image (will use sudo -n so it won't prompt for a password)"
+                        // docker-compose likely needs elevated privileges — use sudo -n so it fails fast if not allowed
+                        sh "${env.SUDO} bash -lc 'docker-compose build'"
+                    }
+                }
             }
         }
 
         stage('Container Vulnerability Scan (Trivy)') {
             steps {
-                echo "Running Trivy..."
-                // Kept 'sudo' for Trivy as requested, but removed 'bash -lc'
-                sh """
-                    mkdir -p "${env.CI_LOGS}"
-                    sudo trivy image --severity CRITICAL,HIGH --format json -o "${env.CI_LOGS}/trivy-report.json" ${env.IMAGE_NAME}:latest
-                """
+                script {
+                    timeout(time: 10, unit: 'MINUTES') {
+                        sh "mkdir -p ${env.CI_LOGS}"
+                        // Trivy may require docker privileges if scanning images; use sudo -n to avoid prompts
+                        sh "${env.SUDO} bash -lc 'trivy image --severity CRITICAL,HIGH --format json -o ${env.CI_LOGS}/trivy-report.json ${env.IMAGE_NAME}:latest'"
+                    }
+                }
             }
         }
 
         stage('Deploy Application') {
             steps {
-                echo "Deploying Docker container..."
-                // Kept 'sudo' for Docker, but removed 'bash -lc'
-                sh "sudo docker-compose up -d"
+                script {
+                    timeout(time: 10, unit: 'MINUTES') {
+                        echo "Deploying Docker container (uses sudo -n)"
+                        sh "${env.SUDO} bash -lc 'docker-compose up -d'"
+                    }
+                }
             }
         }
     }
