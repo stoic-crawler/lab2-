@@ -99,6 +99,7 @@ pipeline {
                     timeout(time: 20, unit: 'MINUTES') {
                         echo "Building Docker image"
                         catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
+                            sh "sudo docker rmi lab2_app:latest"
                             sh "sudo docker-compose build"
                         }
                     }
