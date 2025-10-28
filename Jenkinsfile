@@ -7,18 +7,17 @@ pipeline {
     }
 
     environment {
-        VENV_DIR = 'venv'
-        CI_LOGS = 'ci_logs'
+        VENV_DIR  = 'venv'
+        CI_LOGS   = 'ci_logs'
         IMAGE_NAME = 'lab-2-app'
-        SUDO = 'sudo'
+        SUDO      = 'sudo'
     }
 
     stages {
         stage('Checkout') {
             steps {
                 echo "Cloning repository..."
-                sh "${SUDO} bash -lc 'git rev-parse --is-inside-work-tree || true; git config --global --add safe.directory $(pwd); git status --porcelain || true; git rev-parse --abbrev-ref HEAD || true'"
-                // fallback: use checkout scm if preferred
+                // Use declarative checkout (safer than custom git sh that contained $(pwd))
                 checkout scm
             }
         }
@@ -27,16 +26,8 @@ pipeline {
             steps {
                 script {
                     echo "Creating virtual environment (if missing)..."
-                    sh """
-                        ${SUDO} bash -lc '
-                            if [ ! -d "${VENV_DIR}" ]; then
-                                python3 -m venv ${VENV_DIR}
-                                chown -R $(whoami):$(whoami) ${VENV_DIR} || true
-                            fi
-                            ${VENV_DIR}/bin/pip install --upgrade pip
-                            ${VENV_DIR}/bin/pip install -r requirements.txt
-                        '
-                    """
+                    // Use Groovy interpolation for env vars, avoid $(...) shell expansions
+                    sh "${env.SUDO} bash -lc 'if [ ! -d \"${env.VENV_DIR}\" ]; then python3 -m venv \"${env.VENV_DIR}\"; fi; \"${env.VENV_DIR}\"/bin/pip install --upgrade pip; \"${env.VENV_DIR}\"/bin/pip install -r requirements.txt'"
                 }
             }
         }
@@ -45,9 +36,8 @@ pipeline {
             steps {
                 script {
                     echo "Running pytest..."
-                    sh "${SUDO} mkdir -p ${CI_LOGS}"
-                    // run entire pipeline under sudo so tee and pytest are run as root
-                    sh """${SUDO} bash -lc '${VENV_DIR}/bin/pytest -v test_app.py | tee ${CI_LOGS}/pytest.log'"""
+                    sh "${env.SUDO} mkdir -p \"${env.CI_LOGS}\""
+                    sh "${env.SUDO} bash -lc '\"${env.VENV_DIR}\"/bin/pytest -v test_app.py | tee \"${env.CI_LOGS}\"/pytest.log'"
                 }
             }
         }
@@ -56,8 +46,8 @@ pipeline {
             steps {
                 script {
                     echo "Running Bandit..."
-                    sh "${SUDO} mkdir -p ${CI_LOGS}"
-                    sh "${SUDO} bash -lc '${VENV_DIR}/bin/bandit -r app -f json -o ${CI_LOGS}/bandit-report.json'"
+                    sh "${env.SUDO} mkdir -p \"${env.CI_LOGS}\""
+                    sh "${env.SUDO} bash -lc '\"${env.VENV_DIR}\"/bin/bandit -r app -f json -o \"${env.CI_LOGS}\"/bandit-report.json'"
                 }
             }
         }
@@ -66,8 +56,8 @@ pipeline {
             steps {
                 script {
                     echo "Running Safety..."
-                    sh "${SUDO} mkdir -p ${CI_LOGS}"
-                    sh "${SUDO} bash -lc '${VENV_DIR}/bin/safety check --json > ${CI_LOGS}/safety-report.json'"
+                    sh "${env.SUDO} mkdir -p \"${env.CI_LOGS}\""
+                    sh "${env.SUDO} bash -lc '\"${env.VENV_DIR}\"/bin/safety check --json > \"${env.CI_LOGS}\"/safety-report.json'"
                 }
             }
         }
@@ -76,8 +66,7 @@ pipeline {
             steps {
                 script {
                     echo "Building Docker image..."
-                    // uses sudo to invoke docker-compose
-                    sh "${SUDO} bash -lc 'docker-compose build'"
+                    sh "${env.SUDO} bash -lc 'docker-compose build'"
                 }
             }
         }
@@ -86,8 +75,8 @@ pipeline {
             steps {
                 script {
                     echo "Running Trivy..."
-                    sh "${SUDO} mkdir -p ${CI_LOGS}"
-                    sh "${SUDO} bash -lc 'trivy image --severity CRITICAL,HIGH --format json -o ${CI_LOGS}/trivy-report.json ${IMAGE_NAME}:latest'"
+                    sh "${env.SUDO} mkdir -p \"${env.CI_LOGS}\""
+                    sh "${env.SUDO} bash -lc 'trivy image --severity CRITICAL,HIGH --format json -o \"${env.CI_LOGS}\"/trivy-report.json ${env.IMAGE_NAME}:latest'"
                 }
             }
         }
@@ -96,7 +85,7 @@ pipeline {
             steps {
                 script {
                     echo "Deploying Docker container..."
-                    sh "${SUDO} bash -lc 'docker-compose up -d'"
+                    sh "${env.SUDO} bash -lc 'docker-compose up -d'"
                 }
             }
         }
@@ -105,9 +94,7 @@ pipeline {
     post {
         always {
             echo "Archiving CI logs..."
-            // archiveArtifacts runs on the Jenkins master and typically does not require sudo,
-            // but we leave it as-is (it doesn't run via sh)
-            archiveArtifacts artifacts: "${CI_LOGS}/*.json, ${CI_LOGS}/*.log", allowEmptyArchive: true
+            archiveArtifacts artifacts: "${env.CI_LOGS}/*.json, ${env.CI_LOGS}/*.log", allowEmptyArchive: true
             echo "Pipeline finished. Check archived logs for details."
         }
     }
