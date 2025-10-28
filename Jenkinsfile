@@ -112,7 +112,7 @@ pipeline {
                     timeout(time: 10, unit: 'MINUTES') {
                         sh "mkdir -p ${env.CI_LOGS}"
                         catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
-                            sh "trivy image --severity CRITICAL,HIGH --format json -o ${env.CI_LOGS}/trivy-report.json ${env.IMAGE_NAME}:latest || true"
+                            sh "sudo trivy image --severity CRITICAL,HIGH --format json -o ${env.CI_LOGS}/trivy-report.json ${env.IMAGE_NAME}:latest || true"
                         }
                     }
                 }
